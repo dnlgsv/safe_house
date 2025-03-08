@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lm_anki_cards_creator"
+version = "0.1.0"
+description = "A tool to generate Anki flashcards from vocabulary words using a language model."
+authors = [{ name = "Daniil Gusev", email = "your_email@example.com" }]
+dependencies = [
+    "genanki",
+    "llama-cpp-python",
+    "llama-cpp-python",
+    "elevenlabs",
+]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "B", "C4", "N", "D"]
+ignore = ["E501"]  # Ignore line length violations
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
