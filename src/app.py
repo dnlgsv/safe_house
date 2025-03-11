@@ -1,20 +1,20 @@
+import logging
 import os
-import cv2
 import threading
 import time
-import subprocess
 import wave
-import random
 from collections import deque
-import logging
+
+import cv2
+
+from model_utils import predict_seg
 
 import pyaudio
 from telegram_utils import send_telegram_notification
 
 logger = logging.getLogger(__name__)
-# ---------------------------
-# Video Capture with Rolling Buffer
-# ---------------------------
+
+
 class VideoCaptureBuffer:
     def __init__(self, buffer_seconds=3, source=0):
         self.capture = cv2.VideoCapture(source)
@@ -67,16 +67,13 @@ class VideoCaptureBuffer:
             return None
 
 
-# ---------------------------
-# Audio Capture with Rolling Buffer
-# ---------------------------
 class AudioCaptureBuffer:
     def __init__(self, buffer_seconds=6, rate=44100, channels=1, chunk=1024):
         self.rate = rate
         self.channels = channels
         self.chunk = chunk
-        self.format = pyaudio.paInt16  # 16-bit audio
-        self.audio_interface = pyaudio.PyAudio()
+        self.format = None  # pyaudio.paInt16  # 16-bit audio
+        self.audio_interface = None  # pyaudio.PyAudio()
         self.buffer_maxlen = int((buffer_seconds * rate) / chunk)
         self.buffer = deque(maxlen=self.buffer_maxlen)
         self.running = False
@@ -92,7 +89,7 @@ class AudioCaptureBuffer:
                 channels=self.channels,
                 rate=self.rate,
                 input=True,
-                frames_per_buffer=self.chunk
+                frames_per_buffer=self.chunk,
             )
             self.audio_available = True
             self.thread.start()
@@ -121,26 +118,24 @@ class AudioCaptureBuffer:
 
     def get_audio_clip_between(self, start_time, end_time):
         clip = [data for (t, data) in self.buffer if start_time <= t <= end_time]
-        return b''.join(clip)
+        return b"".join(clip)
 
 
-# ---------------------------
-# Saving Video and Audio Clips
-# ---------------------------
 def save_video_clip(frames, output_file, fps=30):
     if not frames:
         logger.info("No frames to save!")
         return False
     height, width, _ = frames[0].shape
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
     for frame in frames:
         out.write(frame)
     out.release()
     return True
 
+
 def save_audio_clip(audio_data, output_file, rate=44100, channels=1, sample_width=2):
-    wf = wave.open(output_file, 'wb')
+    wf = wave.open(output_file, "wb")
     wf.setnchannels(channels)
     wf.setsampwidth(sample_width)
     wf.setframerate(rate)
@@ -148,32 +143,7 @@ def save_audio_clip(audio_data, output_file, rate=44100, channels=1, sample_widt
     wf.close()
 
 
-# ---------------------------
-# YOLO Inference Simulation
-# ---------------------------
-def detector_inference(frame, confidence_threshold=0.5):
-    # Placeholder for actual YOLO detection
-    pass
-def simulate_yolo_detection(frame, confidence_threshold=0.5):
-    """
-    Simulate a YOLO detection.
-    Replace this with your actual YOLO model inference using PyTorch.
-    For now, we randomly trigger detection with a low probability.
-    """
-    if frame is None:
-        return False, None
-    detection_probability = 0.01  # simulate a 1% chance of detection per frame
-    if random.random() < detection_probability:
-        confidence = random.uniform(confidence_threshold, 1.0)
-        detection_info = {"confidence": confidence, "label": "target_object"}
-        return True, detection_info
-    return False, None
-
-
-# ---------------------------
-# Event Processing and Notification
-# ---------------------------
-def process_event(event_time, video_buffer, audio_buffer):
+def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
     logger.info("Processing event at:", event_time)
     # Retrieve pre-event video from buffer
     pre_event_video = video_buffer.get_video_clip_between(event_time - 3, event_time)
@@ -184,21 +154,28 @@ def process_event(event_time, video_buffer, audio_buffer):
 
     # Save video clip
     video_temp_file = "event_video.mp4"
-    if full_video and save_video_clip(full_video, video_temp_file, fps=video_buffer.fps):
+    if full_video and save_video_clip(
+        full_video, video_temp_file, fps=video_buffer.fps
+    ):
         final_output_file = "event_clip.mp4"
         # Retrieve audio clip if available
         if audio_buffer.audio_available:
-            full_audio = audio_buffer.get_audio_clip_between(event_time - 3, event_time + 3)
+            full_audio = audio_buffer.get_audio_clip_between(
+                event_time - 3, event_time + 3
+            )
         else:
-            full_audio = b''
+            full_audio = b""
             logger.info("No audio data captured.")
 
         if full_audio:
             audio_temp_file = "event_audio.wav"
-            save_audio_clip(full_audio, audio_temp_file,
-                            rate=audio_buffer.rate,
-                            channels=audio_buffer.channels,
-                            sample_width=2)
+            save_audio_clip(
+                full_audio,
+                audio_temp_file,
+                rate=audio_buffer.rate,
+                channels=audio_buffer.channels,
+                sample_width=2,
+            )
             # merge_command = [
             #     "ffmpeg", "-y",
             #     "-i", video_temp_file,
@@ -212,48 +189,57 @@ def process_event(event_time, video_buffer, audio_buffer):
             # os.remove(audio_temp_file)
             # os.remove(video_temp_file)
             # logger.info(f"Saved event clip to '{final_output_file}'.")
+            # merger code commented out...
         else:
             os.rename(video_temp_file, final_output_file)
             logger.info(f"Saved event clip (video only) to '{final_output_file}'.")
-        # Save a snapshot from the middle of the pre-event clip (if available)
-        if pre_event_video:
-            snapshot = pre_event_video[len(pre_event_video)//2]
-            snapshot_file = "snapshot.jpg"
-            cv2.imwrite(snapshot_file, snapshot)
-            logger.info(f"Snapshot saved to '{snapshot_file}'.")
-            # Trigger Telegram notification with the snapshot and event video clip
-            send_telegram_notification(snapshot_file, video_temp_file)
+
+        # Save annotated frame as snapshot (with object detection boxes)
+        snapshot_file = "snapshot.jpg"
+        cv2.imwrite(snapshot_file, annotated_frame)
+        logger.info(f"Snapshot saved to '{snapshot_file}'.")
+
+        # Trigger Telegram notification with the annotated snapshot and event video clip
+        send_telegram_notification(snapshot_file, video_temp_file)
     else:
         logger.info("Failed to save video clip.")
 
 
-# ---------------------------
-# Detection Engine Thread
-# ---------------------------
 def detection_loop(video_buffer, audio_buffer, stop_event):
     last_event_time = 0
     cooldown_period = 5  # seconds between events to avoid duplicates
+    frame_count = 0  # Add counter for frame skipping
+
     while not stop_event.is_set():
         frame = video_buffer.get_latest_frame()
         if frame is not None:
-            detected, detection_info = simulate_yolo_detection(frame)
-            if detected:
-                current_time = time.time()
-                # Check cooldown to prevent multiple triggers from the same event
-                if current_time - last_event_time > cooldown_period:
-                    logger.info("Detection triggered with info:", detection_info)
-                    last_event_time = current_time
-                    # Process the event in a separate thread
-                    event_thread = threading.Thread(target=process_event,
-                                                    args=(current_time, video_buffer, audio_buffer),
-                                                    daemon=True)
-                    event_thread.start()
+            frame_count += 1
+
+            # Only process every 15th frame to reduce computational load
+            if frame_count % 15 == 0:
+                detected, annotated_frame, objects = predict_seg(frame)
+                detection_info = {"detected": detected, "objects": objects}
+                if detected and "person" in objects:
+                    current_time = time.time()
+                    # Check cooldown to prevent multiple triggers from the same event
+                    if current_time - last_event_time > cooldown_period:
+                        logger.info(f"Detection triggered with info: {detection_info}")
+                        last_event_time = current_time
+                        # Process the event in a separate thread
+                        event_thread = threading.Thread(
+                            target=process_event,
+                            args=(
+                                current_time,
+                                video_buffer,
+                                audio_buffer,
+                                annotated_frame,
+                            ),
+                            daemon=True,
+                        )
+                        event_thread.start()
         time.sleep(0.1)  # check every 100ms
 
 
-# ---------------------------
-# Main: Capture, Detection, and Event Processing
-# ---------------------------
 if __name__ == "__main__":
     # Initialize video and audio buffers
     video_buffer = VideoCaptureBuffer(buffer_seconds=3)
@@ -263,9 +249,11 @@ if __name__ == "__main__":
     audio_buffer.start()
 
     stop_event = threading.Event()
-    detection_thread = threading.Thread(target=detection_loop,
-                                        args=(video_buffer, audio_buffer, stop_event),
-                                        daemon=True)
+    detection_thread = threading.Thread(
+        target=detection_loop,
+        args=(video_buffer, audio_buffer, stop_event),
+        daemon=True,
+    )
     detection_thread.start()
 
     try:
