@@ -8,8 +8,8 @@ from collections import deque
 import cv2
 
 from model_utils import predict_seg
-
 import pyaudio
+import shutil
 from telegram_utils import send_telegram_notification
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ def save_audio_clip(audio_data, output_file, rate=44100, channels=1, sample_widt
 
 
 def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
-    logger.info("Processing event at:", event_time)
+    logger.info(f"Processing event at: {event_time}")  # Fixed string formatting
     # Retrieve pre-event video from buffer
     pre_event_video = video_buffer.get_video_clip_between(event_time - 3, event_time)
     # Wait for post-event video to be captured
@@ -154,10 +154,11 @@ def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
 
     # Save video clip
     video_temp_file = "event_video.mp4"
+    final_output_file = "event_clip.mp4"
+
     if full_video and save_video_clip(
         full_video, video_temp_file, fps=video_buffer.fps
     ):
-        final_output_file = "event_clip.mp4"
         # Retrieve audio clip if available
         if audio_buffer.audio_available:
             full_audio = audio_buffer.get_audio_clip_between(
@@ -168,14 +169,15 @@ def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
             logger.info("No audio data captured.")
 
         if full_audio:
-            audio_temp_file = "event_audio.wav"
-            save_audio_clip(
-                full_audio,
-                audio_temp_file,
-                rate=audio_buffer.rate,
-                channels=audio_buffer.channels,
-                sample_width=2,
-            )
+            pass
+            # audio_temp_file = "event_audio.wav"
+            # save_audio_clip(
+            #     full_audio,
+            #     audio_temp_file,
+            #     rate=audio_buffer.rate,
+            #     channels=audio_buffer.channels,
+            #     sample_width=2,
+            # )
             # merge_command = [
             #     "ffmpeg", "-y",
             #     "-i", video_temp_file,
@@ -191,7 +193,7 @@ def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
             # logger.info(f"Saved event clip to '{final_output_file}'.")
             # merger code commented out...
         else:
-            os.rename(video_temp_file, final_output_file)
+            shutil.copy2(video_temp_file, final_output_file)
             logger.info(f"Saved event clip (video only) to '{final_output_file}'.")
 
         # Save annotated frame as snapshot (with object detection boxes)
@@ -199,8 +201,26 @@ def process_event(event_time, video_buffer, audio_buffer, annotated_frame):
         cv2.imwrite(snapshot_file, annotated_frame)
         logger.info(f"Snapshot saved to '{snapshot_file}'.")
 
-        # Trigger Telegram notification with the annotated snapshot and event video clip
-        send_telegram_notification(snapshot_file, video_temp_file)
+        # Create caption with detected objects
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        caption = f"Motion detected at {timestamp}"
+
+        # Trigger Telegram notification with the annotated snapshot and video clip
+        send_telegram_notification(
+            snapshot_file,
+            video_temp_file,
+            caption_dict={
+                "image_caption": caption,
+                "video_caption": f"Video recording of the event at {timestamp}",
+            },
+        )
+
+        # Now we can safely remove the temp file
+        try:
+            os.remove(video_temp_file)
+        except Exception as e:
+            logger.info(f"Error removing temp file: {e}")
+
     else:
         logger.info("Failed to save video clip.")
 
