@@ -239,7 +239,7 @@ def detection_loop(video_buffer, audio_buffer, stop_event):
             if frame_count % 15 == 0:
                 detected, annotated_frame, objects = predict_seg(frame)
                 detection_info = {"detected": detected, "objects": objects}
-                if detected and "person" in objects:
+                if detected and ("person" in objects or "cat" in objects):
                     current_time = time.time()
                     # Check cooldown to prevent multiple triggers from the same event
                     if current_time - last_event_time > cooldown_period:
